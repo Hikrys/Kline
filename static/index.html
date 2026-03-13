@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>比特鹰 K线系统 - 实时行情</title>
+    <!-- 引入 TradingView 图表库 -->
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        body { margin: 0; padding: 0; background-color: #131722; color: #d1d4dc; font-family: sans-serif; }
+        .header { padding: 15px 20px; background-color: #1e222d; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2a2e39;}
+        .title { font-size: 20px; font-weight: bold; color: #fff; }
+        #chart-container { width: 100vw; height: calc(100vh - 65px); }
+        .status { color: #00ff00; font-size: 14px;}
+        .status.offline { color: #ff3333; }
+        .status.loading { color: #ffcc00; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="title">🦅 比特鹰 实盘 K 线系统</div>
+    <div>
+        <span class="status loading" id="ws-status">🟡 正在加载历史数据...</span>
+        &nbsp;&nbsp;&nbsp;
+        <select id="symbol-select">
+            <option value="BTC/USDT">Binance: BTC/USDT</option>
+        </select>
+    </div>
+</div>
+
+<!-- K线图容器 -->
+<div id="chart-container"></div>
+
+<script>
+    // 1. 初始化图表
+    const chart = LightweightCharts.createChart(document.getElementById('chart-container'), {
+        layout: { textColor: '#d1d4dc', background: { type: 'solid', color: '#131722' } },
+        grid: { vertLines: { color: '#363c4e' }, horzLines: { color: '#363c4e' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        timeScale: { timeVisible: true, secondsVisible: false },
+    });
+
+    const series = chart.addCandlestickSeries({
+        upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
+        wickUpColor: '#26a69a', wickDownColor: '#ef5350'
+    });
+
+    // 2. 加载历史数据
+    async function initChart() {
+        try {
+            const symbol = document.getElementById('symbol-select').value;
+            // 为了防止 / 破坏 URL 结构，用 encodeURIComponent 编码一下
+            const encodedSymbol = encodeURIComponent(symbol);
+
+            console.log(`向后端请求历史数据: /api/history?symbol=${encodedSymbol}`);
+            const res = await fetch(`/api/history?symbol=${encodedSymbol}`);
+            const historyData = await res.json();
+
+            if(historyData && historyData.length > 0) {
+                // TV 图表要求时间戳必须绝对递增，且为整数
+                const cleanData = historyData.map(item => ({
+                    time: Math.floor(item.time), // 强制转为整数秒
+                    open: item.open,
+                    high: item.high,
+                    low: item.low,
+                    close: item.close
+                }));
+
+                series.setData(cleanData);
+                console.log("历史数据加载成功！");
+            } else {
+                console.warn("后端返回的历史数据为空！");
+            }
+
+            // 历史渲染完了，连 WebSocket
+            connectWS(symbol);
+
+        } catch (e) {
+            console.error("❌ 前端执行报错:", e);
+            document.getElementById('ws-status').innerText = '🔴 历史数据加载失败 (请按 F12 看控制台)';
+            document.getElementById('ws-status').className = 'status offline';
+        }
+    }
+
+    // 3. WebSocket 实时更新
+    function connectWS(symbol) {
+        const ws = new WebSocket(`ws://${window.location.host}/ws`);
+
+        ws.onopen = () => {
+            document.getElementById('ws-status').innerText = '🟢 WebSocket 实时同步中';
+            document.getElementById('ws-status').className = 'status';
+            ws.send(JSON.stringify({ action: "subscribe", symbol: symbol }));
+        };
+
+        ws.onmessage = (e) => {
+            const data = JSON.parse(e.data);
+            if (data.open !== undefined) {
+                series.update({
+                    time: Math.floor(data.timestamp / 1000),
+                    open: data.open,
+                    high: data.high,
+                    low: data.low,
+                    close: data.close,
+                });
+            }
+        };
+
+        ws.onclose = () => {
+            document.getElementById('ws-status').innerText = '🔴 WebSocket 已断开';
+            document.getElementById('ws-status').className = 'status offline';
+        };
+    }
+
+    // 启动！
+    initChart();
+</script>
+</body>
+</html>
