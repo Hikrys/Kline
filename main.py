@@ -4,54 +4,63 @@ import aiohttp
 import uvicorn
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
+from fastapi.staticfiles import StaticFiles
 
 from app.api.endpoints import router
+# 把三个交易所都引进来！
 from app.exchanges.binance import BinanceAPI
+from app.exchanges.okx import OkxAPI
+from app.exchanges.gateio import GateioAPI
+
 from app.services.collector import DataCollector
 from app.db.timeseries import TimeSeriesDB
 
-# 全局变量，用来在后台运行我们的任务
 background_tasks = set()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    FastAPI 的生命周期管理器。
-    相当于 Go 里的 main 函数刚启动时执行的逻辑，以及 defer 执行的清理逻辑。
-    """
-    print("🚀 系统启动，正在初始化后台采集引擎...")
-    binance = BinanceAPI()
-    db = TimeSeriesDB()
+    print("🚀 系统启动，正在初始化【三端全链路】多核采集引擎...")
 
-    # 建立一个全局的长连接给爬虫用
+    # 实例化三大交易所API
+    exchanges = [BinanceAPI(), OkxAPI(), GateioAPI()]
+    db = TimeSeriesDB()
     session = aiohttp.ClientSession()
 
-    symbols = await binance.fetch_symbols(session)
-    # 测试模式：抽取 10 个跑跑看。如果想全量跑，就把 [:10] 删掉！
-    test_symbols = symbols[:10]
+    collectors = []
 
-    collector = DataCollector(binance, test_symbols)
+    # 遍历三大交易所，并发获取所有的交易对
+    for exchange in exchanges:
+        print(f"🔍 正在拉取 {exchange.exchange_name} 所有现货交易对...")
+        symbols = await exchange.fetch_symbols(session)
+        print(f"✅ {exchange.exchange_name} 成功发现 {len(symbols)} 个现货交易对！")
 
-    # 把采集任务和存储任务放到后台运行 (相当于 go run_1m_loop())
-    task1 = asyncio.create_task(collector.run_1m_loop(session))
-    task2 = asyncio.create_task(collector.storage_worker(db))
-    background_tasks.add(task1)
-    background_tasks.add(task2)
+        # 测试模式：每个交易所切出前 50 个来跑并发！
+        test_symbols = symbols[:50]
 
-    yield  # 这里是分水岭！上面的代码在启动时运行，下面的代码在关闭时运行
+        # 给每个交易所单独配备一个独立的 DataCollector 引擎！
+        # 但它们共用同一个 db (存入同一张表)，共用同一个 websocket_manager (全网广播)
+        collector = DataCollector(exchange, test_symbols)
+        collectors.append(collector)
 
-    print("\n🛑 收到退出信号，正在关闭系统...")
+        # 启动这个交易所的独立轮询循环和存库循环
+        task_loop = asyncio.create_task(collector.run_1m_loop(session))
+        task_store = asyncio.create_task(collector.storage_worker(db))
+
+        background_tasks.add(task_loop)
+        background_tasks.add(task_store)
+
+    yield
+
+    print("\n🛑 收到退出信号，正在优雅关闭所有服务...")
     for task in background_tasks:
         task.cancel()
     await session.close()
     await db.close()
 
 
-# 实例化 FastAPI 框架
 app = FastAPI(lifespan=lifespan, title="比特鹰 K线系统")
-
-# 挂载我们刚才写的路由
+app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(router)
 
 if __name__ == "__main__":
@@ -59,6 +68,4 @@ if __name__ == "__main__":
 
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-    # 启动 Uvicorn Web 服务器，监听 8000 端口
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)

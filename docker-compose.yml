@@ -1,19 +1,28 @@
 version: '3.8'
 
 services:
+  kline-app:
+    build: .
+    container_name: kline_app_server
+    ports:
+      - "8000:8000"
+    depends_on:
+      - influxdb
+    network_mode: "host"
+    restart: always
+
+  # InfluxDB 时序数据库
   influxdb:
     image: influxdb:2.7-alpine
     container_name: kline_influxdb
     ports:
       - "8086:8086"
     environment:
-      # 自动初始化数据库的账号密码和 Token
       - DOCKER_INFLUXDB_INIT_MODE=setup
       - DOCKER_INFLUXDB_INIT_USERNAME=admin
       - DOCKER_INFLUXDB_INIT_PASSWORD=admin12345
       - DOCKER_INFLUXDB_INIT_ORG=kline_org
       - DOCKER_INFLUXDB_INIT_BUCKET=kline_bucket
-      # 这个 Token 极其重要，我们后续 Python 代码连数据库就靠它
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-auth-token-for-kline
     volumes:
       - influxdb-data:/var/lib/influxdb2
