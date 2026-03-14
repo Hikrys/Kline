@@ -5,6 +5,7 @@ from typing import List
 from exchanges.base import BaseExchange
 from storage.timeseries import TimeSeriesDB
 from server.ws_handler import manager
+from engine.rate_limit import RateLimiter
 
 
 class DataCollector:
@@ -46,21 +47,14 @@ class DataCollector:
 
             print(f"开始本轮采集，共 {total_symbols} 个交易对...")
 
-            # 均匀分布，避免瞬间突发
-            # 60 秒 / 交易对数量 = 每次发请求的间隔时间
-            # 如果有 1200 个对，每次间隔就是 0.05 秒。极其平滑，不会触发 Rate Limit！
-            delay_between_requests = 60.0 / total_symbols
-
-            # 采用 asyncio.TaskGroup (相当于 Go 里的 errgroup.Group)
+            limiter = RateLimiter(total_symbols, window_seconds=60.0)
             # 当 with 块结束时，它会自动等待里面所有的 Task 执行完毕！
             try:
                 async with asyncio.TaskGroup() as tg:
                     for symbol in self.symbols:
                         # 开一个 Goroutine 去抓取
                         tg.create_task(self.fetch_worker(session, symbol, "1m"))
-
-                        # 休眠，达到匀速下发！
-                        await asyncio.sleep(delay_between_requests)
+                        await limiter.wait()
             except* Exception as e:
                 # Python 3.11+ 的新语法 except*，专门用来捕获 TaskGroup 里的并发异常
                 print(f"本轮采集出现异常: {e}")
