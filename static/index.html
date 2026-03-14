@@ -3,136 +3,153 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>比特鹰 K线系统 - 实时行情</title>
+    <title>比特鹰 多交易所 K 线系统</title>
     <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
     <style>
-        body { margin: 0; padding: 0; background-color: #131722; color: #d1d4dc; font-family: sans-serif; }
+        body { margin: 0; padding: 0; background-color: #131722; color: #d1d4dc; font-family: -apple-system, sans-serif; }
         .header { padding: 15px 20px; background-color: #1e222d; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2a2e39;}
         .title { font-size: 20px; font-weight: bold; color: #fff; }
-        /* 图表容器 */
+        .controls select { padding: 6px; background: #2a2e39; color: #fff; border: 1px solid #363c4e; border-radius: 4px; outline: none; margin-left: 10px; cursor: pointer;}
         #chart-container { width: 100vw; height: calc(100vh - 65px); position: relative; }
         .status { color: #00ff00; font-size: 14px;}
         .status.offline { color: #ff3333; }
-        .status.loading { color: #ffcc00; }
-        /* 浮动的信息面板（展示开高低收和涨跌幅） */
-        .legend { position: absolute; top: 10px; left: 10px; z-index: 10; font-size: 14px; background: rgba(30,34,45,0.8); padding: 5px 10px; border-radius: 4px; pointer-events: none;}
+        .legend { position: absolute; top: 10px; left: 10px; z-index: 10; font-size: 14px; background: rgba(30,34,45,0.8); padding: 5px 10px; border-radius: 4px; pointer-events: none; color: #d1d4dc;}
     </style>
 </head>
 <body>
 
 <div class="header">
     <div class="title">🦅 比特鹰 多交易所 K 线系统</div>
-    <div>
-        <span class="status loading" id="ws-status">🟡 正在加载历史数据...</span>
-        &nbsp;&nbsp;&nbsp;
-        <!-- 这里预留了时间周期切换的下拉框 (满足文档要求) -->
-        <select id="interval-select">
-            <option value="1m">1分钟</option>
+    <div class="controls">
+        <span class="status" id="ws-status">🟡 正在初始化...</span>
+        <!-- 时间周期切换器 -->
+        <select id="interval-select" onchange="onConfigChange()">
+            <option value="1m" selected>1分钟</option>
+            <option value="5m">5分钟</option>
+            <option value="15m">15分钟</option>
+            <option value="1h">1小时</option>
+            <option value="4h">4小时</option>
+            <option value="1d">1天</option>
         </select>
-        <select id="symbol-select">
-            <option value="BTC/USDT">Binance: BTC/USDT</option>
+        <!-- 交易对选择器 (动态填充) -->
+        <select id="symbol-select" onchange="onConfigChange()">
+            <option value="BTC/USDT">加载中...</option>
         </select>
     </div>
 </div>
 
 <div id="chart-container">
-    <div class="legend" id="legend">BTC/USDT 准备就绪...</div>
+    <div class="legend" id="legend">加载数据中...</div>
 </div>
 
 <script>
-    // 1. 初始化主图表
+    // 1. 初始化图表 (修复了图表压扁的问题！)
     const chart = LightweightCharts.createChart(document.getElementById('chart-container'), {
         layout: { textColor: '#d1d4dc', background: { type: 'solid', color: '#131722' } },
         grid: { vertLines: { color: '#363c4e' }, horzLines: { color: '#363c4e' } },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-        timeScale: { timeVisible: true, secondsVisible: false },
+        timeScale: { timeVisible: true, secondsVisible: false }
     });
 
-    // 2. 添加 K 线系列
-    const series = chart.addCandlestickSeries({
-        upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
-        wickUpColor: '#26a69a', wickDownColor: '#ef5350'
+    // 【核心修复】：显式设置右侧价格刻度的上下边距，防止被成交量挤压！
+    chart.priceScale('right').applyOptions({
+        scaleMargins: { top: 0.1, bottom: 0.3 }
     });
 
-    // 3. 【满足文档要求】：添加下方的成交量柱状图系列！
-    const volumeSeries = chart.addHistogramSeries({
-        color: '#26a69a',
-        priceFormat: { type: 'volume' },
-        priceScaleId: '', // 独立坐标轴
-        scaleMargins: { top: 0.8, bottom: 0 }, // 挤在最下面 20% 的高度
-    });
+    const series = chart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
+    const volumeSeries = chart.addHistogramSeries({ color: '#26a69a', priceFormat: { type: 'volume' }, priceScaleId: '', scaleMargins: { top: 0.8, bottom: 0 } });
 
     const legend = document.getElementById('legend');
+    const tzOffset = new Date().getTimezoneOffset() * 60;
 
-    // 4. 加载历史数据
-    async function initChart() {
+    let ws = null;
+    let currentSymbol = "BTC/USDT"; // 默认币种
+
+    // 2. 动态加载后端的全量交易对列表！
+    async function loadSymbols() {
         try {
-            const symbol = document.getElementById('symbol-select').value;
-            const encodedSymbol = encodeURIComponent(symbol);
+            const res = await fetch('/api/symbols');
+            const data = await res.json();
+            const select = document.getElementById('symbol-select');
+            select.innerHTML = ''; // 清空加载中
 
-            console.log(`向后端请求历史数据...`);
-            const res = await fetch(`/api/history?symbol=${encodedSymbol}`);
-            const historyData = await res.json();
-
-            if(historyData && historyData.length > 0) {
-                // 拆分出 K线数据 和 成交量数据
-                const klineData = historyData.map(item => ({
-                    time: Math.floor(item.time), open: item.open, high: item.high, low: item.low, close: item.close
-                }));
-                const volData = historyData.map(item => ({
-                    time: Math.floor(item.time), value: item.volume,
-                    color: item.close >= item.open ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)'
-                }));
-
-                series.setData(klineData);
-                volumeSeries.setData(volData); // 渲染成交量！
-
-                // 更新浮窗
-                const last = klineData[klineData.length - 1];
-                legend.innerHTML = `${symbol} O: ${last.open} H: ${last.high} L: ${last.low} C: ${last.close}`;
+            // 遍历并生成分组下拉框 (Binance, OKX, Gateio)
+            for (const exchange in data) {
+                if(data[exchange].length > 0) {
+                    const optgroup = document.createElement('optgroup');
+                    optgroup.label = exchange.toUpperCase();
+                    // 为了前端不卡，最多只展示前 200 个对
+                    data[exchange].slice(0, 200).forEach(sym => {
+                        const option = document.createElement('option');
+                        option.value = sym;
+                        option.text = sym;
+                        if(sym === "BTC/USDT") option.selected = true;
+                        optgroup.appendChild(option);
+                    });
+                    select.appendChild(optgroup);
+                }
             }
-            // 连接 WebSocket
-            connectWS(symbol);
-        } catch (e) {
-            console.error("历史数据加载失败:", e);
-            document.getElementById('ws-status').innerText = '🔴 历史数据加载失败';
-            document.getElementById('ws-status').className = 'status offline';
-        }
+        } catch (e) { console.error("加载交易对失败", e); }
     }
 
-    // 5. WebSocket 实时更新
-    function connectWS(symbol) {
-        const ws = new WebSocket(`ws://${window.location.host}/ws`);
+    // 3. 当用户切换币种或周期时触发
+    function onConfigChange() {
+        currentSymbol = document.getElementById('symbol-select').value;
+        const interval = document.getElementById('interval-select').value;
+
+        // 清空旧图表数据
+        series.setData([]);
+        volumeSeries.setData([]);
+        legend.innerHTML = `${currentSymbol} 加载中...`;
+
+        // 断开旧的 WS 连接，重新连
+        if(ws && ws.readyState === WebSocket.OPEN) ws.close();
+        connectWS(currentSymbol, interval);
+    }
+
+    // 4. WebSocket 核心逻辑
+    function connectWS(symbol, interval) {
+        ws = new WebSocket(`ws://${window.location.host}/ws`);
 
         ws.onopen = () => {
             document.getElementById('ws-status').innerText = '🟢 WebSocket 实时同步中';
             document.getElementById('ws-status').className = 'status';
+            ws.send(JSON.stringify({ action: "get_history", symbol: symbol, interval: interval }));
             ws.send(JSON.stringify({ action: "subscribe", symbol: symbol }));
         };
 
         ws.onmessage = (e) => {
-            const data = JSON.parse(e.data);
-            if (data.open !== undefined) {
-                const timeStr = Math.floor(data.timestamp / 1000);
+            const msg = JSON.parse(e.data);
 
-                // 实时更新 K线
-                series.update({ time: timeStr, open: data.open, high: data.high, low: data.low, close: data.close });
-                // 实时更新成交量
-                volumeSeries.update({
-                    time: timeStr, value: data.volume,
-                    color: data.close >= data.open ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)'
-                });
+            if (msg.type === "history" && msg.data) {
+                const kData = msg.data.map(i => ({ time: i.time - tzOffset, open: i.open, high: i.high, low: i.low, close: i.close }));
+                const vData = msg.data.map(i => ({ time: i.time - tzOffset, value: i.volume, color: i.close >= i.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)' }));
+                series.setData(kData); volumeSeries.setData(vData);
+                updateLegend(kData[kData.length-1], vData[vData.length-1]);
+            }
 
-                legend.innerHTML = `${symbol} O: ${data.open} H: ${data.high} L: ${data.low} C: ${data.close} V: ${data.volume}`;
+            if (msg.type === "realtime" && msg.data && msg.data.symbol === currentSymbol) {
+                const k = msg.data;
+                const timeStr = Math.floor(k.timestamp / 1000) - tzOffset;
+                series.update({ time: timeStr, open: k.open, high: k.high, low: k.low, close: k.close });
+                volumeSeries.update({ time: timeStr, value: k.volume, color: k.close >= k.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)' });
+                updateLegend(k, {value: k.volume});
             }
         };
+
         ws.onclose = () => {
             document.getElementById('ws-status').innerText = '🔴 WebSocket 已断开';
             document.getElementById('ws-status').className = 'status offline';
         };
     }
 
-    initChart();
+    function updateLegend(k, v) {
+        if(!k) return;
+        legend.innerHTML = `${currentSymbol} O: ${k.open} H: ${k.high} L: ${k.low} C: ${k.close} V: ${v.value.toFixed(2)}`;
+    }
+
+    // 页面启动！
+    loadSymbols().then(() => connectWS("BTC/USDT", "1m"));
 </script>
 </body>
 </html>
