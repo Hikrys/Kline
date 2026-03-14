@@ -1,10 +1,10 @@
-# app/services/collector.py
+# app/services/scheduler.py
 import asyncio
 import aiohttp
 from typing import List
-from app.exchanges.base import BaseExchange
-from app.db.timeseries import TimeSeriesDB
-from app.services.websocket_manager import manager
+from exchanges.base import BaseExchange
+from storage.timeseries import TimeSeriesDB
+from server.ws_handler import manager
 
 
 class DataCollector:

@@ -1,7 +1,7 @@
 # app/exchanges/base.py
 import abc
 from typing import List
-from app.models.kline import StandardKline
+from models.kline import StandardKline
 
 
 class BaseExchange(abc.ABC):

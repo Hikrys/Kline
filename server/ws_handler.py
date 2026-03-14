@@ -1,7 +1,7 @@
-# app/services/websocket_manager.py
+# app/services/ws_handler.py
 from fastapi import WebSocket
 from typing import Dict, Set
-from app.models.kline import StandardKline
+from models.kline import StandardKline
 import orjson
 
 
@@ -39,23 +39,23 @@ class ConnectionManager:
             self.subscriptions[symbol].remove(websocket)
 
     async def broadcast_kline(self, kline: StandardKline):
-        # 收到一根K线 查询订阅者进行推送
         if kline.symbol in self.subscriptions:
             connections = self.subscriptions[kline.symbol]
             if not connections:
                 return
 
-            # orjson 替代标准 json 进行高速序列化
-            # Pydantic 模型转成 dict，然后用 orjson 打包成字节流发出去
-            json_bytes = orjson.dumps(kline.model_dump())
+            # 把 K 线数据包装一层，标明这是实时增量数据
+            payload = {
+                "type": "realtime",
+                "data": kline.model_dump()
+            }
+            json_bytes = orjson.dumps(payload)
             json_str = json_bytes.decode('utf-8')
 
-            # 并发推送给所有订阅了这个交易对的客户端
-            for connection in list(connections):  # 强制转成 list 防止遍历时集合改变报错
+            for connection in list(connections):
                 try:
                     await connection.send_text(json_str)
                 except Exception as e:
-                    print(f"⚠️ 推送给某个客户端失败，清理死连接: {e}")
                     self.disconnect(connection)
 
 

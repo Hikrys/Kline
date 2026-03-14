@@ -1,12 +1,11 @@
 # app/db/timeseries.py
-import json
 import asyncio
 import aiofiles
 import os
 from typing import List
 from influxdb_client import Point, WritePrecision
 from influxdb_client.client.influxdb_client_async import InfluxDBClientAsync
-from app.models.kline import StandardKline
+from models.kline import StandardKline
 
 
 class TimeSeriesDB:

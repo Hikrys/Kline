@@ -1,8 +1,8 @@
 # app/exchanges/binance.py
 import aiohttp
 from typing import List, Optional
-from app.exchanges.base import BaseExchange
-from app.models.kline import StandardKline
+from exchanges.base import BaseExchange
+from models.kline import StandardKline
 
 
 class BinanceAPI(BaseExchange):
