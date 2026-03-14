@@ -3,6 +3,7 @@ import aiohttp
 from typing import List, Optional
 from exchanges.base import BaseExchange
 from models.kline import StandardKline
+from config import settings
 
 
 class BinanceAPI(BaseExchange):
@@ -10,7 +11,7 @@ class BinanceAPI(BaseExchange):
         super().__init__()
         self.exchange_name = "binance"
         self.base_url = "https://api.binance.com"
-        self.proxy = "http://127.0.0.1:10809"
+        self.proxy = settings.system.proxy_url if settings.system.use_proxy else None
 
     async def fetch_symbols(self, session: aiohttp.ClientSession) -> List[str]:
         """

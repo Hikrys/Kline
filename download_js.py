@@ -7,7 +7,7 @@ import sys
 async def download_chart_library():
     url = "https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"
     proxy = "http://127.0.0.1:10809"  # 用你的万能代理！
-    save_path = os.path.join("static", "lightweight-charts.standalone.production.js")
+    save_path = os.path.join("web", "lightweight-charts.standalone.production.js")
 
     # 确保static目录存在，避免文件写入失败
     os.makedirs(os.path.dirname(save_path), exist_ok=True)

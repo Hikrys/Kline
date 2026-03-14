@@ -12,8 +12,6 @@ class DataCollector:
         self.api = exchange_api
         self.symbols = symbols
 
-        # 这个 Queue 相当于 Go 里的带缓冲的 Channel: chan StandardKline
-        # 后面我们要写的“入库服务”和“WebSocket推送”都会从这个 Channel 里拿数据！
         self.queue = asyncio.Queue(maxsize=5000)
 
     async def fetch_worker(self, session: aiohttp.ClientSession, symbol: str, interval: str):
@@ -23,7 +21,6 @@ class DataCollector:
             try:
                 kline = await self.api.fetch_kline(session, symbol, interval)
                 if kline:
-                    # 获取成功，塞进 Channel！
                     await self.queue.put(kline)
                     print(f"[{self.api.exchange_name}] 采集成功: {symbol}")
                     return

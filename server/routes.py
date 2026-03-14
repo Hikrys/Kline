@@ -1,28 +1,49 @@
-# app/api/routes.py
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
-from server.ws_handler import manager
-from core.state import state
+# server/routes.py
 import json
 import aiohttp
 import os
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse
+
+from server.ws_handler import manager
+from core.state import state
+from config import settings
 
 router = APIRouter()
 
 
 @router.get("/")
 async def get_index():
-    html_path = os.path.join(os.getcwd(), "static", "index.html")
+    html_path = os.path.join(os.getcwd(), "web", "index.html")
     with open(html_path, "r", encoding="utf-8") as f:
         html_content = f.read()
     return HTMLResponse(content=html_content)
 
 
+@router.get("/api/symbols")
+async def get_symbols():
+    return JSONResponse(content=state.symbols)
+
+
+@router.get("/api/status")
+async def get_status():
+    return JSONResponse(content={
+        "status": "running",
+        "active_ws_connections": len(manager.subscriptions),
+        "queue_depth": state.queue_depth,
+        "exchanges_loaded": list(state.symbols.keys())
+    })
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
-    # 建立一个专属于这个 WebSocket 连接的 HTTP Session，用来代理拉取历史数据
-    session = aiohttp.ClientSession()
+
+    # 获取配置里的代理
+    proxy = settings.system.proxy_url if settings.system.use_proxy else None
+    connector = aiohttp.TCPConnector(ssl=False)
+    session = aiohttp.ClientSession(connector=connector)
+
     try:
         while True:
             data_str = await websocket.receive_text()
@@ -30,66 +51,53 @@ async def websocket_endpoint(websocket: WebSocket):
 
             action = data.get("action")
             symbol = data.get("symbol")
-            interval = data.get("interval", "1m")  # 默认 1m
+            interval = data.get("interval", "1m")
 
             if action == "subscribe" and symbol:
                 await manager.subscribe(websocket, symbol)
-                # 订阅成功通知
-                await websocket.send_text(json.dumps({"type": "system", "status": "subscribed", "symbol": symbol}))
 
             elif action == "unsubscribe" and symbol:
                 await manager.unsubscribe(websocket, symbol)
-                await websocket.send_text(json.dumps({"type": "system", "status": "unsubscribed", "symbol": symbol}))
 
-            # 通过 WebSocket 查询历史数据
             elif action == "get_history" and symbol:
                 raw_symbol = symbol.replace("/", "")
-                url = f"https://api.binance.com/api/v3/klines"
+
+                # 同时并发请求 历史K线数据和24小时涨跌幅数据
+                kline_url = f"https://api.binance.com/api/v3/klines"
+                ticker_url = f"https://api.binance.com/api/v3/ticker/24hr"
+
                 params = {"symbol": raw_symbol, "interval": interval, "limit": 100}
-                proxy = "http://127.0.0.1:10809"
+                ticker_params = {"symbol": raw_symbol}
 
                 try:
-                    async with session.get(url, params=params, proxy=proxy) as resp:
-                        if resp.status == 200:
-                            klines = await resp.json()
-                            clean_data = []
-                            for k in klines:
-                                clean_data.append({
-                                    "time": int(k[0]) / 1000,
-                                    "open": float(k[1]),
-                                    "high": float(k[2]),
-                                    "low": float(k[3]),
-                                    "close": float(k[4]),
-                                    "volume": float(k[5])
-                                })
-                            # 把历史数据打包，打上 "type": "history" 的标签发给前端
-                            await websocket.send_text(json.dumps({
-                                "type": "history",
-                                "symbol": symbol,
-                                "interval": interval,
-                                "data": clean_data
-                            }))
+                    # 并发拉取两个接口，节省时间！
+                    async with session.get(kline_url, params=params, proxy=proxy) as resp1, \
+                            session.get(ticker_url, params=ticker_params, proxy=proxy) as resp2:
+
+                        klines = await resp1.json() if resp1.status == 200 else []
+                        ticker = await resp2.json() if resp2.status == 200 else {}
+
+                        clean_data = [{
+                            "time": int(k[0]) / 1000, "open": float(k[1]),
+                            "high": float(k[2]), "low": float(k[3]),
+                            "close": float(k[4]), "volume": float(k[5])
+                        } for k in klines]
+
+                        # 把历史 K 线和 24h 涨跌幅一起打包发给前端
+                        await websocket.send_text(json.dumps({
+                            "type": "history",
+                            "symbol": symbol,
+                            "interval": interval,
+                            "data": clean_data,
+                            "ticker": {
+                                "priceChangePercent": ticker.get("priceChangePercent", "0.00"),
+                                "lastPrice": ticker.get("lastPrice", "0.00")
+                            }
+                        }))
                 except Exception as e:
-                    print(f"WS 拉取历史数据失败: {e}")
-                    await websocket.send_text(json.dumps({"type": "error", "message": "历史数据拉取失败"}))
+                    print(f"!!!WS 拉取历史数据失败: {e}")
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     finally:
         await session.close()
-
-
-@router.get("/api/symbols")
-async def get_symbols():
-    """ 返回支持的交易所列表及各交易所的交易对列表"""
-    return JSONResponse(content=state.symbols)
-
-@router.get("/api/status")
-async def get_status():
-    """ 系统运行状态（含队列深度）"""
-    return JSONResponse(content={
-        "status": "running",
-        "active_connections": len(manager.subscriptions),
-        "queue_depth": state.queue_depth,
-        "exchanges": list(state.symbols.keys())
-    })

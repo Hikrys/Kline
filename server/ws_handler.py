@@ -1,19 +1,17 @@
 # app/services/ws_handler.py
+import orjson
 from fastapi import WebSocket
 from typing import Dict, Set
 from models.kline import StandardKline
-import orjson
 
 
 class ConnectionManager:
     """
-    WebSocket 连接管理器 (相当于 Go IM 项目里的 Hub/ClientManager)
+    WebSocket 连接管理器
     负责维护谁订阅了什么交易对，以及向他们广播最新价格。
     """
 
     def __init__(self):
-        # 内存订阅字典：Key 是交易对(如 BTC/USDT)，Value 是订阅了这个对的所有 WebSocket 连接集合
-        # 相当于 Go 里的 map[string]map[*websocket.Conn]bool
         self.subscriptions: Dict[str, Set[WebSocket]] = {}
 
     async def connect(self, websocket: WebSocket):

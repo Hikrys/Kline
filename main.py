@@ -1,71 +1,78 @@
-# main.py
+import sys
+import asyncio
 import aiohttp
 import uvicorn
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from fastapi.staticfiles import StaticFiles
+
+# 引入我们的配置文件
+from config import settings
 from core.state import state
 
+# 引入重构后的模块 (严格对齐文档结构)
 from server.routes import router
-# 把三个交易所都引进来！
 from exchanges.binance import BinanceAPI
 from exchanges.okx import OkxAPI
 from exchanges.gateio import GateioAPI
-
 from engine.scheduler import DataCollector
 from storage.timeseries import TimeSeriesDB
-import sys
-import asyncio
-
-# 智能识别环境，实现极致性能要求！
-if sys.platform != "win32":
-    try:
-        import uvloop
-        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-        print("⚡ Linux 环境检测到，已启用 uvloop 极致性能事件循环！")
-    except ImportError:
-        print("⚠️ 建议在 Linux 环境运行 `pip install uvloop` 以获取最佳性能。")
-else:
-    # Windows 环境的兼容策略
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    print("🖥️ Windows 环境检测到，使用标准事件循环。")
 
 background_tasks = set()
 
 
+async def hourly_symbol_refresh(exchanges: list, session: aiohttp.ClientSession):
+    """
+    【满足文档 1.1 要求】：每小时定时刷新一次全量交易对，纳入新上线的币种
+    """
+    while True:
+        # 挂起 1 小时 (3600 秒)
+        await asyncio.sleep(3600)
+        print("🔄 [定时任务] 触发每小时刷新全网交易对列表...")
+        for exchange in exchanges:
+            try:
+                symbols = await exchange.fetch_symbols(session)
+                if symbols:
+                    state.symbols[exchange.exchange_name] = symbols
+                    print(f"✅ [定时任务] {exchange.exchange_name} 交易对已更新，共 {len(symbols)} 个")
+            except Exception as e:
+                print(f"⚠️ [定时任务] {exchange.exchange_name} 更新失败: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🚀 系统启动，正在初始化【三端全链路】多核采集引擎...")
+    print("🚀 系统启动，读取 config.yaml 配置...")
 
-    # 实例化三大交易所API
     exchanges = [BinanceAPI(), OkxAPI(), GateioAPI()]
     db = TimeSeriesDB()
-    session = aiohttp.ClientSession()
 
-    collectors = []
+    # 针对可能存在的代理网络，关闭 SSL 严格验证以防断连
+    connector = aiohttp.TCPConnector(ssl=False)
+    session = aiohttp.ClientSession(connector=connector)
 
-    # 遍历三大交易所，并发获取所有的交易对
+    # 1. 启动时立刻获取一次全量交易对
     for exchange in exchanges:
         print(f"🔍 正在拉取 {exchange.exchange_name} 所有现货交易对...")
         symbols = await exchange.fetch_symbols(session)
-        # 把拉到的全量交易对列表，存入全局状态机
+
+        # 存入全局内存状态 (供 REST API 和 前端下拉框使用)
         state.symbols[exchange.exchange_name] = symbols
         print(f"✅ {exchange.exchange_name} 成功发现 {len(symbols)} 个现货交易对！")
 
-        # 测试模式：每个交易所切出前 50 个来跑并发！
+        # 测试模式：每个交易所切 50 个来跑并发采集
         test_symbols = symbols[:50]
 
-        # 给每个交易所单独配备一个独立的 DataCollector 引擎！
-        # 但它们共用同一个 db (存入同一张表)，共用同一个 websocket_manager (全网广播)
+        # 2. 拉起采集引擎和数据库写入消费者
         collector = DataCollector(exchange, test_symbols)
-        collectors.append(collector)
-
-        # 启动这个交易所的独立轮询循环和存库循环
         task_loop = asyncio.create_task(collector.run_1m_loop(session))
         task_store = asyncio.create_task(collector.storage_worker(db))
 
         background_tasks.add(task_loop)
         background_tasks.add(task_store)
+
+    # 3. 拉起【每小时自动刷新】的后台监控任务
+    refresh_task = asyncio.create_task(hourly_symbol_refresh(exchanges, session))
+    background_tasks.add(refresh_task)
 
     yield
 
@@ -77,12 +84,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan, title="比特鹰 K线系统")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/web", StaticFiles(directory="web"), name="web")
 app.include_router(router)
 
 if __name__ == "__main__":
-    import sys
+    if sys.platform != "win32":
+        try:
+            import uvloop
 
-    if sys.platform == "win32":
+            asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+            print("⚡ Linux 环境检测到，已启用 uvloop 极致性能事件循环！")
+        except ImportError:
+            pass
+    else:
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+
+    # 从 settings 读取绑定的 IP 和端口
+    uvicorn.run("main:app", host=settings.server.host, port=settings.server.port, reload=False)

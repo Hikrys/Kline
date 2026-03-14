@@ -23,6 +23,7 @@
     <div class="controls">
         <span class="status" id="ws-status">🟡 正在初始化...</span>
         <!-- 时间周期切换器 -->
+        <span id="ticker-info" style="font-size: 15px; font-weight: bold; margin-right: 15px;"></span>
         <select id="interval-select" onchange="onConfigChange()">
             <option value="1m" selected>1分钟</option>
             <option value="5m">5分钟</option>
@@ -43,7 +44,7 @@
 </div>
 
 <script>
-    // 1. 初始化图表 (修复了图表压扁的问题！)
+    // 初始化图表
     const chart = LightweightCharts.createChart(document.getElementById('chart-container'), {
         layout: { textColor: '#d1d4dc', background: { type: 'solid', color: '#131722' } },
         grid: { vertLines: { color: '#363c4e' }, horzLines: { color: '#363c4e' } },
@@ -65,7 +66,7 @@
     let ws = null;
     let currentSymbol = "BTC/USDT"; // 默认币种
 
-    // 2. 动态加载后端的全量交易对列表！
+    // 动态加载后端的全量交易对列表！
     async function loadSymbols() {
         try {
             const res = await fetch('/api/symbols');
@@ -92,7 +93,7 @@
         } catch (e) { console.error("加载交易对失败", e); }
     }
 
-    // 3. 当用户切换币种或周期时触发
+    // 当用户切换币种或周期时触发
     function onConfigChange() {
         currentSymbol = document.getElementById('symbol-select').value;
         const interval = document.getElementById('interval-select').value;
@@ -107,7 +108,7 @@
         connectWS(currentSymbol, interval);
     }
 
-    // 4. WebSocket 核心逻辑
+    // WebSocket 核心逻辑
     function connectWS(symbol, interval) {
         ws = new WebSocket(`ws://${window.location.host}/ws`);
 
@@ -126,6 +127,14 @@
                 const vData = msg.data.map(i => ({ time: i.time - tzOffset, value: i.volume, color: i.close >= i.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)' }));
                 series.setData(kData); volumeSeries.setData(vData);
                 updateLegend(kData[kData.length-1], vData[vData.length-1]);
+                // 渲染24小时涨跌幅
+                if(msg.ticker) {
+                    const pct = parseFloat(msg.ticker.priceChangePercent);
+                    const color = pct >= 0 ? '#00ff00' : '#ff3333';
+                    const sign = pct >= 0 ? '+' : '';
+                    document.getElementById('ticker-info').innerHTML =
+                        `<span style="color:${color}">${sign}${pct.toFixed(2)}%</span>`;
+                }
             }
 
             if (msg.type === "realtime" && msg.data && msg.data.symbol === currentSymbol) {
