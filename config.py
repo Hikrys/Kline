@@ -18,10 +18,14 @@ class ServerConfig(BaseModel):
     host: str
     port: int
 
+class RedisConfig(BaseModel):
+    url: str
+
 class AppConfig(BaseModel):
     system: SystemConfig
     database: DatabaseConfig
     server: ServerConfig
+    redis: RedisConfig
 
 def load_config() -> AppConfig:
     config_path = os.path.join(os.path.dirname(__file__), "config.yaml")

@@ -28,5 +28,12 @@ services:
       - influxdb-data:/var/lib/influxdb2
     restart: always
 
+  redis:
+    image: redis:7-alpine
+    container_name: kline_redis
+    ports:
+      - "6379:6379"
+    restart: always
+
 volumes:
   influxdb-data:

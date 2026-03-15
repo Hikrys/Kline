@@ -1,5 +1,5 @@
 # server/ws_handler.py
-import json
+import orjson
 import asyncio
 import redis.asyncio as aioredis
 from fastapi import WebSocket
@@ -62,7 +62,7 @@ class ConnectionManager:
                 if message["type"] == "message":
                     # 解析 Redis 发来的数据
                     data_str = message["data"].decode("utf-8")
-                    data = json.loads(data_str)
+                    data = orjson.loads(data_str)
                     # 提取出这是哪个币的数据
                     symbol = data.get("data", {}).get("symbol")
                     if symbol:

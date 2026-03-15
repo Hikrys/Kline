@@ -24,7 +24,7 @@
     <div class="title">🦅 比特鹰 多交易所 K 线系统</div>
     <div class="controls">
         <span class="status" id="ws-status">🟡 正在初始化...</span>
-
+        <span id="ticker-info" style="font-size: 15px; font-weight: bold; margin-right: 15px;"></span>
         <select id="interval-select">
             <option value="1m" selected>1分钟 (1m)</option>
             <option value="5m">5分钟 (5m)</option>
@@ -145,6 +145,14 @@
                     if (kData.length > 0) {
                         series.setData(kData); volumeSeries.setData(vData);
                         updateLegend(kData[kData.length-1], vData[vData.length-1]);
+                        // (加在 history 数据处理的最后面)
+                        if(msg.ticker) {
+                            const pct = parseFloat(msg.ticker.priceChangePercent);
+                            const color = pct >= 0 ? '#00ff00' : '#ff3333';
+                            const sign = pct >= 0 ? '+' : '';
+                            document.getElementById('ticker-info').innerHTML =
+                                `<span style="color:${color}">${sign}${pct.toFixed(2)}%</span>`;
+                        }
                     } else {
                         legend.innerHTML = `⚠️ ${exchange.toUpperCase()}: ${symbol} ${interval} 暂无历史数据`;
                     }
@@ -179,7 +187,8 @@
             const low = Number(k.low).toFixed(2);
             const close = Number(k.close).toFixed(2);
             const volume = Number(v.value).toFixed(2);
-            legend.innerHTML = `${currentExchange.toUpperCase()}: ${currentSymbol} O:${open} H:${high} L:${low} C:${close} V:${volume}`;
+            const turnover = k.turnover ? Number(k.turnover).toFixed(2) : '--';
+            legend.innerHTML = `${currentExchange.toUpperCase()}: ${currentSymbol} O:${open} H:${high} L:${low} C:${close} V:${volume} T:${turnover}`;
         }
 
         document.getElementById('interval-select').addEventListener('change', onConfigChange);

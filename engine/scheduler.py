@@ -1,7 +1,7 @@
 # app/services/scheduler.py
 import asyncio
 import aiohttp
-import json
+import orjson
 import redis.asyncio as aioredis
 from config import settings
 from typing import List
@@ -87,7 +87,7 @@ class DataCollector:
                     "type": "realtime",
                     "data": kline.model_dump()
                 }
-                await self.redis_client.publish("kline:broadcast", json.dumps(payload))
+                await self.redis_client.publish("kline:broadcast", orjson.dumps(payload))
 
                 if len(batch) >= batch_size:
                     to_insert = batch[:]
