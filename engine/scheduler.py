@@ -1,11 +1,15 @@
 # app/services/scheduler.py
 import asyncio
 import aiohttp
+import json
+import redis.asyncio as aioredis
+from config import settings
 from typing import List
 from exchanges.base import BaseExchange
 from storage.timeseries import TimeSeriesDB
 from server.ws_handler import manager
 from engine.rate_limit import RateLimiter
+
 
 
 class DataCollector:
@@ -14,6 +18,8 @@ class DataCollector:
         self.symbols = symbols
 
         self.queue = asyncio.Queue(maxsize=5000)
+        # 初始化Redis发布端客户端
+        self.redis_client = aioredis.from_url(settings.redis.url)
 
     async def fetch_worker(self, session: aiohttp.ClientSession, symbol: str, interval: str):
         # 指数退避重试
@@ -76,8 +82,12 @@ class DataCollector:
                 kline = await self.queue.get()
                 batch.append(kline)
 
-                # 从队列拿到K线，存库，除了存库，立刻广播给所有订阅者
-                await manager.broadcast_kline(kline)
+                # 把数据打进 Redis 广播中
+                payload = {
+                    "type": "realtime",
+                    "data": kline.model_dump()
+                }
+                await self.redis_client.publish("kline:broadcast", json.dumps(payload))
 
                 if len(batch) >= batch_size:
                     to_insert = batch[:]
@@ -90,4 +100,4 @@ class DataCollector:
                     await db.write_batch(batch)
                 break
             except Exception as e:
-                print(f" 存储消费者异常: {e}")
+                print(f"存储消费者异常: {e}")
