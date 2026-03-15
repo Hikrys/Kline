@@ -81,13 +81,22 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    yield
+    print("\n收到退出信号，正在关闭所有服务...")
 
-    print("\n 收到退出信号，正在优雅关闭所有服务...")
+    # 先给所有后台任务发送取消信号
     for task in background_tasks:
         task.cancel()
+
+    # 等待所有任务真正完成收尾工作
+    # 给 storage_worker 留出足够的时间，把内存里的残余数据平滑地写进 wal.log！
+    print("等待后台队列排空与日志落盘...")
+    await asyncio.gather(*background_tasks, return_exceptions=True)
+
+    # 任务全都安全停止后，最后再关闭底层的 HTTP 连接和数据库连接！
+    print("正在断开数据库与网络连接...")
     await session.close()
     await db.close()
+    print("系统安全退出。")
 
 
 app = FastAPI(lifespan=lifespan, title="比特鹰 K线系统")
