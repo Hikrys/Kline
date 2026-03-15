@@ -126,6 +126,13 @@
                 // 明确告诉后端 要哪个交易所、哪个币、哪个周期
                 ws.send(JSON.stringify({ action: "get_history", exchange: exchange, symbol: symbol, interval: interval }));
                 ws.send(JSON.stringify({ action: "subscribe", symbol: symbol }));
+
+                //心跳机制，每隔三十秒发送心跳给后端
+                setInterval(() => {
+                if(ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ action: "ping" }));
+                }
+            }, 30000);
             };
 
             ws.onmessage = (e) => {
