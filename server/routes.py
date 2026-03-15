@@ -35,12 +35,56 @@ async def get_status():
     })
 
 
+async def fetch_history_from_exchange(session, exchange: str, symbol: str, interval: str):
+    """
+    核心难点攻克：根据前端传来的交易所和周期，动态穿透去拉取真实历史数据！
+    """
+    proxy = settings.system.proxy_url if settings.system.use_proxy else None
+    clean_data = []
+
+    try:
+        if exchange == "binance":
+            url = "https://api.binance.com/api/v3/klines"
+            params = {"symbol": symbol.replace("/", ""), "interval": interval, "limit": 100}
+            async with session.get(url, params=params, proxy=proxy) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    clean_data = [
+                        {"time": int(k[0]) / 1000, "open": float(k[1]), "high": float(k[2]), "low": float(k[3]),
+                         "close": float(k[4]), "volume": float(k[5])} for k in data]
+
+        elif exchange == "okx":
+            # OKX 的周期参数是 1H, 1D 大写，需要转换
+            okx_interval = interval.replace("h", "H").replace("d", "D")
+            url = "https://aws.okx.com/api/v5/market/candles"
+            params = {"instId": symbol.replace("/", "-"), "bar": okx_interval, "limit": 100}
+            async with session.get(url, params=params, proxy=proxy) as resp:
+                if resp.status == 200:
+                    data = (await resp.json()).get("data", [])
+                    data.reverse()  # OKX 返回是倒序的(最新的在最前面)，TradingView 需要正序
+                    clean_data = [
+                        {"time": int(k[0]) / 1000, "open": float(k[1]), "high": float(k[2]), "low": float(k[3]),
+                         "close": float(k[4]), "volume": float(k[5])} for k in data]
+
+        elif exchange == "gateio":
+            url = "https://api.gateio.ws/api/v4/spot/candlesticks"
+            params = {"currency_pair": symbol.replace("/", "_"), "interval": interval, "limit": 100}
+            async with session.get(url, params=params, proxy=proxy) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    # Gateio 时间戳本身就是秒，顺序是[时间, 额, 收, 高, 低, 开, 量]
+                    clean_data = [{"time": int(k[0]), "open": float(k[5]), "high": float(k[3]), "low": float(k[4]),
+                                   "close": float(k[2]), "volume": float(k[6])} for k in data]
+
+    except Exception as e:
+        print(f"动态拉取 {exchange} 历史数据失败: {e}")
+
+    return clean_data
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
-
-    # 获取配置里的代理
-    proxy = settings.system.proxy_url if settings.system.use_proxy else None
     connector = aiohttp.TCPConnector(ssl=False)
     session = aiohttp.ClientSession(connector=connector)
 
@@ -51,6 +95,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             action = data.get("action")
             symbol = data.get("symbol")
+            exchange = data.get("exchange", "binance")
             interval = data.get("interval", "1m")
 
             if action == "subscribe" and symbol:
@@ -60,42 +105,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 await manager.unsubscribe(websocket, symbol)
 
             elif action == "get_history" and symbol:
-                raw_symbol = symbol.replace("/", "")
+                history_data = await fetch_history_from_exchange(session, exchange, symbol, interval)
 
-                # 同时并发请求 历史K线数据和24小时涨跌幅数据
-                kline_url = f"https://api.binance.com/api/v3/klines"
-                ticker_url = f"https://api.binance.com/api/v3/ticker/24hr"
-
-                params = {"symbol": raw_symbol, "interval": interval, "limit": 100}
-                ticker_params = {"symbol": raw_symbol}
-
-                try:
-                    # 并发拉取两个接口，节省时间！
-                    async with session.get(kline_url, params=params, proxy=proxy) as resp1, \
-                            session.get(ticker_url, params=ticker_params, proxy=proxy) as resp2:
-
-                        klines = await resp1.json() if resp1.status == 200 else []
-                        ticker = await resp2.json() if resp2.status == 200 else {}
-
-                        clean_data = [{
-                            "time": int(k[0]) / 1000, "open": float(k[1]),
-                            "high": float(k[2]), "low": float(k[3]),
-                            "close": float(k[4]), "volume": float(k[5])
-                        } for k in klines]
-
-                        # 把历史 K 线和 24h 涨跌幅一起打包发给前端
-                        await websocket.send_text(json.dumps({
-                            "type": "history",
-                            "symbol": symbol,
-                            "interval": interval,
-                            "data": clean_data,
-                            "ticker": {
-                                "priceChangePercent": ticker.get("priceChangePercent", "0.00"),
-                                "lastPrice": ticker.get("lastPrice", "0.00")
-                            }
-                        }))
-                except Exception as e:
-                    print(f"!!!WS 拉取历史数据失败: {e}")
+                await websocket.send_text(json.dumps({
+                    "type": "history",
+                    "symbol": symbol,
+                    "interval": interval,
+                    "data": history_data
+                }))
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
