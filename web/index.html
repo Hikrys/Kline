@@ -135,8 +135,14 @@
             }, 30000);
             };
 
-            ws.onmessage = (e) => {
-                const msg = JSON.parse(e.data);
+            ws.onmessage = async (e) => {
+            try {
+                // 💡 【核心黑科技】：兼容 orjson 发送的高性能二进制 Blob 数据！
+                let textData = e.data;
+                if (e.data instanceof Blob) {
+                    textData = await e.data.text(); // 如果是二进制流，秒解成文本
+                }
+                const msg = JSON.parse(textData);
 
                 if (msg.type === "history" && msg.data) {
                     const kData = msg.data.map(i => ({ time: i.time - tzOffset, open: i.open, high: i.high, low: i.low, close: i.close }));
@@ -165,7 +171,10 @@
                     volumeSeries.update({ time: timeStr, value: k.volume, color: k.close >= k.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)' });
                     updateLegend(k, {value: k.volume});
                 }
-            };
+            } catch (err) {
+                console.error("解析 WebSocket 数据失败:", err);
+            }
+        };
 
             ws.onclose = () => {
                 document.getElementById('ws-status').innerText = '🔴 WS 断开';

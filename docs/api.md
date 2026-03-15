@@ -145,7 +145,7 @@
     "exchange": "binance",
     "symbol": "BTC/USDT",
     "interval": "1m",
-    "timestamp": 1710500060000, // 毫秒级时间戳
+    "timestamp": 1710500060000, 
     "open": 70050.00,
     "high": 70060.00,
     "low": 70040.00,

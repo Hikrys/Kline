@@ -21,7 +21,7 @@ class DataCollector:
         # 初始化Redis发布端客户端
         self.redis_client = aioredis.from_url(settings.redis.url)
 
-    async def fetch_worker(self, session: aiohttp.ClientSession, symbol: str, interval: str):
+    async def fetch_worker(self, session: aiohttp.ClientSession, symbol: str, interval: str) -> None:
         # 指数退避重试
         max_retries = 3
         for attempt in range(max_retries):
@@ -37,7 +37,7 @@ class DataCollector:
             # 指数退避机制。第一次失败等 1秒(2^0)，第二次等 2秒(2^1)，第三次等 4秒(2^2)
             await asyncio.sleep(2 ** attempt)
 
-    async def run_1m_loop(self, session: aiohttp.ClientSession):
+    async def run_1m_loop(self, session: aiohttp.ClientSession) -> None:
         """
         每分钟执行一次的轮询主循环 (全场最核心逻辑)
         """
@@ -54,7 +54,6 @@ class DataCollector:
             print(f"开始本轮采集，共 {total_symbols} 个交易对...")
 
             limiter = RateLimiter(total_symbols, window_seconds=60.0)
-            # 当 with 块结束时，它会自动等待里面所有的 Task 执行完毕！
             try:
                 async with asyncio.TaskGroup() as tg:
                     for symbol in self.symbols:
@@ -73,7 +72,7 @@ class DataCollector:
 
             await asyncio.sleep(sleep_time)
 
-    async def storage_worker(self, db: TimeSeriesDB):
+    async def storage_worker(self, db: TimeSeriesDB) -> None:
         batch_size = 50
         batch = []
 

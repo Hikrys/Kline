@@ -5,6 +5,7 @@ import aiohttp
 import os
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
+from typing import List, Dict, Any, Tuple
 
 from server.ws_handler import manager
 from core.state import state
@@ -34,7 +35,12 @@ async def get_status():
     })
 
 
-async def fetch_history_from_exchange(session, exchange: str, symbol: str, interval: str):
+async def fetch_history_from_exchange(
+    session: aiohttp.ClientSession,
+    exchange: str,
+    symbol: str,
+    interval: str
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     根据前端传来的交易所和周期，动态穿透去拉取真实历史数据和 24H 涨跌幅
     """

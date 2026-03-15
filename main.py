@@ -5,6 +5,8 @@ import uvicorn
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from fastapi.staticfiles import StaticFiles
+from typing import List
+from exchanges.base import BaseExchange
 
 
 # 引入配置文件
@@ -22,7 +24,7 @@ from server.ws_handler import manager
 background_tasks = set()
 
 
-async def hourly_symbol_refresh(exchanges: list, session: aiohttp.ClientSession):
+async def hourly_symbol_refresh(exchanges: List[BaseExchange], session: aiohttp.ClientSession) -> None:
     """
     每小时定时刷新一次全量交易对，纳入新上线的币种
     """
