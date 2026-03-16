@@ -1,5 +1,5 @@
 services:
-  # 量化采集与 Web 服务
+  # 服务主体：Web 和采集服务
   kline-app:
     build: .
     container_name: kline_engine
@@ -8,6 +8,9 @@ services:
     depends_on:
       - influxdb
       - redis
+    volumes:
+      #显式挂载 config.yaml 进行配置
+      - ./config.yaml:/app/config.yaml
     restart: always
 
   # 时序数据库
@@ -24,6 +27,7 @@ services:
       - DOCKER_INFLUXDB_INIT_BUCKET=kline_bucket
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-auth-token-for-kline
     volumes:
+      # 时序数据库持久化
       - influxdb-data:/var/lib/influxdb2
     restart: always
 
@@ -33,7 +37,12 @@ services:
     container_name: kline_redis
     ports:
       - "6379:6379"
+    command: redis-server --appendonly yes # 开启 AOF 持久化
+    volumes:
+      # Redis 数据持久化
+      - redis-data:/data
     restart: always
 
 volumes:
   influxdb-data:
+  redis-data:
