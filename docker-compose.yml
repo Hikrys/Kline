@@ -1,17 +1,16 @@
-version: '3.8'
-
 services:
+  # 量化采集与 Web 服务
   kline-app:
     build: .
-    container_name: kline_app_server
+    container_name: kline_engine
     ports:
-      - "8000:8000"
+      - "8089:8000"
     depends_on:
       - influxdb
-    network_mode: "host"
+      - redis
     restart: always
 
-  # InfluxDB 时序数据库
+  # 时序数据库
   influxdb:
     image: influxdb:2.7-alpine
     container_name: kline_influxdb
@@ -28,6 +27,7 @@ services:
       - influxdb-data:/var/lib/influxdb2
     restart: always
 
+  # Redis 消息总线
   redis:
     image: redis:7-alpine
     container_name: kline_redis
