@@ -3,12 +3,14 @@ import asyncio
 import aiohttp
 import orjson
 import redis.asyncio as aioredis
+from core.state import state
 from config import settings
 from typing import List
 from exchanges.base import BaseExchange
 from storage.timeseries import TimeSeriesDB
 from server.ws_handler import manager
-from engine.rate_limit import RateLimiter
+from engine.rate_limiter import RateLimiter
+from engine.queue import TaskQueue
 
 
 
@@ -17,7 +19,7 @@ class DataCollector:
         self.api = exchange_api
         self.symbols = symbols
 
-        self.queue = asyncio.Queue(maxsize=5000)
+        self.queue = TaskQueue()
         # 初始化Redis发布端客户端
         self.redis_client = aioredis.from_url(settings.redis.url)
 
@@ -78,6 +80,8 @@ class DataCollector:
 
         while True:
             try:
+                # 每次循环，更新全局状态里的队列深度，供前端 API 查询
+                state.queue_depth = self.queue.qsize()
                 kline = await self.queue.get()
                 batch.append(kline)
 

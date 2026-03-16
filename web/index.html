@@ -4,19 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>比特鹰 多交易所 K 线系统</title>
+    <!-- 引入图表库 -->
     <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
     <link rel="icon" href="data:;base64,iVBORw0KGgo=">
-    <style>
-        body { margin: 0; padding: 0; background-color: #131722; color: #d1d4dc; font-family: -apple-system, sans-serif; }
-        .header { padding: 15px 20px; background-color: #1e222d; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2a2e39;}
-        .title { font-size: 20px; font-weight: bold; color: #fff; }
-        .controls select, .controls input { padding: 6px; background: #2a2e39; color: #fff; border: 1px solid #363c4e; border-radius: 4px; outline: none; margin-left: 10px; }
-        .controls input { width: 220px; }
-        #chart-container { width: 100vw; height: calc(100vh - 65px); position: relative; }
-        .status { color: #00ff00; font-size: 14px;}
-        .status.offline { color: #ff3333; }
-        .legend { position: absolute; top: 10px; left: 10px; z-index: 10; font-size: 14px; background: rgba(30,34,45,0.8); padding: 5px 10px; border-radius: 4px; pointer-events: none; color: #d1d4dc;}
-    </style>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
@@ -25,7 +16,7 @@
     <div class="controls">
         <span class="status" id="ws-status">🟡 正在初始化...</span>
         <span id="ticker-info" style="font-size: 15px; font-weight: bold; margin-right: 15px;"></span>
-        <select id="interval-select">
+        <select id="interval-select" onchange="onConfigChange()">
             <option value="1m" selected>1分钟 (1m)</option>
             <option value="5m">5分钟 (5m)</option>
             <option value="15m">15分钟 (15m)</option>
@@ -33,9 +24,8 @@
             <option value="4h">4小时 (4h)</option>
             <option value="1d">1天 (1d)</option>
         </select>
-        <input type="text" id="symbol-input" list="symbol-list" value="binance:BTC/USDT" placeholder="搜索交易所或币种...">
-        <datalist id="symbol-list">
-        </datalist>
+        <input type="text" id="symbol-input" list="symbol-list" value="binance:BTC/USDT" placeholder="搜索交易所或币种..." onchange="onConfigChange()">
+        <datalist id="symbol-list"></datalist>
     </div>
 </div>
 
@@ -43,173 +33,7 @@
     <div class="legend" id="legend">加载数据中...</div>
 </div>
 
-<script>
-    // 修复：确保 LightweightCharts 加载完成后再执行核心代码
-    document.addEventListener('DOMContentLoaded', async function() {
-        // 先检查 LightweightCharts 是否加载成功
-        if (typeof LightweightCharts === 'undefined') {
-            alert('图表库加载失败，请刷新页面重试！');
-            document.getElementById('legend').innerText = '❌ 图表库加载失败';
-            return;
-        }
+<script src="/static/app.js"></script>
 
-        // 初始化图表
-        const chart = LightweightCharts.createChart(document.getElementById('chart-container'), {
-            layout: { textColor: '#d1d4dc', background: { type: 'solid', color: '#131722' } },
-            grid: { vertLines: { color: '#363c4e' }, horzLines: { color: '#363c4e' } },
-            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-            timeScale: { timeVisible: true, secondsVisible: false }
-        });
-
-        chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.1, bottom: 0.3 } });
-
-        const series = chart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
-        const volumeSeries = chart.addHistogramSeries({ color: '#26a69a', priceFormat: { type: 'volume' }, priceScaleId: '', scaleMargins: { top: 0.8, bottom: 0 } });
-
-        const legend = document.getElementById('legend');
-        const tzOffset = new Date().getTimezoneOffset() * 60;
-
-        let ws = null;
-        //先定义变量，再绑定事件
-        let currentExchange = "binance";
-        let currentSymbol = "BTC/USDT";
-
-        // 动态加载全量交易对，填充到 datalist 中供模糊搜索
-        async function loadSymbols() {
-            try {
-                const res = await fetch('/api/symbols');
-                const data = await res.json();
-                const datalist = document.getElementById('symbol-list');
-                datalist.innerHTML = '';
-
-                for (const exchange in data) {
-                    // 将交易所名字和交易对拼接，如 okx:ETH/USDT，方便一次性选定
-                    data[exchange].forEach(sym => {
-                        const option = document.createElement('option');
-                        option.value = `${exchange}:${sym}`;
-                        datalist.appendChild(option);
-                    });
-                }
-            } catch (e) { console.error("加载交易对失败", e); }
-        }
-
-        // 当用户输入回车，或从下拉列表选中时触发
-        function onConfigChange() {
-            const rawInput = document.getElementById('symbol-input').value;
-            const interval = document.getElementById('interval-select').value;
-
-            // 解析输入的文本 (如 "okx:BTC/USDT")
-            if (rawInput.includes(":")) {
-                const parts = rawInput.split(":");
-                currentExchange = parts[0];
-                currentSymbol = parts[1];
-            } else {
-                // 如果用户乱输，默认保护
-                currentSymbol = rawInput;
-            }
-
-            series.setData([]); volumeSeries.setData([]);
-            legend.innerHTML = `${currentExchange.toUpperCase()}: ${currentSymbol} 加载中...`;
-
-            if(ws && ws.readyState === WebSocket.OPEN) ws.close();
-            connectWS(currentExchange, currentSymbol, interval);
-        }
-
-        // 完整的 WebSocket 逻辑
-        function connectWS(exchange, symbol, interval) {
-            ws = new WebSocket(`ws://${window.location.host}/ws`);
-
-            ws.onopen = () => {
-                document.getElementById('ws-status').innerText = '🟢 实时同步中';
-                document.getElementById('ws-status').className = 'status';
-
-                // 明确告诉后端 要哪个交易所、哪个币、哪个周期
-                ws.send(JSON.stringify({ action: "get_history", exchange: exchange, symbol: symbol, interval: interval }));
-                ws.send(JSON.stringify({ action: "subscribe", symbol: symbol }));
-
-                //心跳机制，每隔三十秒发送心跳给后端
-                setInterval(() => {
-                if(ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ action: "ping" }));
-                }
-            }, 30000);
-            };
-
-            ws.onmessage = async (e) => {
-            try {
-                // 💡 【核心黑科技】：兼容 orjson 发送的高性能二进制 Blob 数据！
-                let textData = e.data;
-                if (e.data instanceof Blob) {
-                    textData = await e.data.text(); // 如果是二进制流，秒解成文本
-                }
-                const msg = JSON.parse(textData);
-
-                if (msg.type === "history" && msg.data) {
-                    const kData = msg.data.map(i => ({ time: i.time - tzOffset, open: i.open, high: i.high, low: i.low, close: i.close }));
-                    const vData = msg.data.map(i => ({ time: i.time - tzOffset, value: i.volume, color: i.close >= i.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)' }));
-
-                    if (kData.length > 0) {
-                        series.setData(kData); volumeSeries.setData(vData);
-                        updateLegend(kData[kData.length-1], vData[vData.length-1]);
-                        // (加在 history 数据处理的最后面)
-                        if(msg.ticker) {
-                            const pct = parseFloat(msg.ticker.priceChangePercent);
-                            const color = pct >= 0 ? '#00ff00' : '#ff3333';
-                            const sign = pct >= 0 ? '+' : '';
-                            document.getElementById('ticker-info').innerHTML =
-                                `<span style="color:${color}">${sign}${pct.toFixed(2)}%</span>`;
-                        }
-                    } else {
-                        legend.innerHTML = `⚠️ ${exchange.toUpperCase()}: ${symbol} ${interval} 暂无历史数据`;
-                    }
-                }
-
-                if (msg.type === "realtime" && msg.data && msg.data.symbol === currentSymbol) {
-                    const k = msg.data;
-                    const timeStr = Math.floor(k.timestamp / 1000) - tzOffset;
-                    series.update({ time: timeStr, open: k.open, high: k.high, low: k.low, close: k.close });
-                    volumeSeries.update({ time: timeStr, value: k.volume, color: k.close >= k.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)' });
-                    updateLegend(k, {value: k.volume});
-                }
-            } catch (err) {
-                console.error("解析 WebSocket 数据失败:", err);
-            }
-        };
-
-            ws.onclose = () => {
-                document.getElementById('ws-status').innerText = '🔴 WS 断开';
-                document.getElementById('ws-status').className = 'status offline';
-                setTimeout(() => connectWS(exchange, symbol, interval), 3000);
-            };
-
-            ws.onerror = (err) => {
-                console.error('WS 错误:', err);
-                document.getElementById('ws-status').innerText = '🔴 WS 连接错误';
-                document.getElementById('ws-status').className = 'status offline';
-            };
-        }
-
-        function updateLegend(k, v) {
-            if(!k) return;
-            const open = Number(k.open).toFixed(2);
-            const high = Number(k.high).toFixed(2);
-            const low = Number(k.low).toFixed(2);
-            const close = Number(k.close).toFixed(2);
-            const volume = Number(v.value).toFixed(2);
-            const turnover = k.turnover ? Number(k.turnover).toFixed(2) : '--';
-            legend.innerHTML = `${currentExchange.toUpperCase()}: ${currentSymbol} O:${open} H:${high} L:${low} C:${close} V:${volume} T:${turnover}`;
-        }
-
-        document.getElementById('interval-select').addEventListener('change', onConfigChange);
-        document.getElementById('symbol-input').addEventListener('change', onConfigChange);
-
-        document.getElementById('symbol-input').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') onConfigChange();
-        });
-
-        await loadSymbols();
-        connectWS(currentExchange, currentSymbol, "1m");
-    });
-</script>
 </body>
 </html>

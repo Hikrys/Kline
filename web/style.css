@@ -1,0 +1,29 @@
+html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden; /* 绝对禁止浏览器滚动条出现 */
+    background-color: #131722; color: #d1d4dc; font-family: -apple-system, sans-serif;
+}
+.header {
+    height: 60px;
+    padding: 0 20px; background-color: #1e222d;
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid #2a2e39; box-sizing: border-box;
+}
+.title { font-size: 20px; font-weight: bold; color: #fff; }
+.controls select, .controls input {
+    padding: 6px; background: #2a2e39; color: #fff; border: 1px solid #363c4e;
+    border-radius: 4px; outline: none; margin-left: 10px;
+}
+.controls input { width: 220px; }
+#chart-container {
+    width: 100%; height: calc(100% - 60px);
+    position: relative;
+}
+.status { color: #00ff00; font-size: 14px;}
+.status.offline { color: #ff3333; }
+.status.loading { color: #ffcc00; }
+.legend {
+    position: absolute; top: 10px; left: 10px; z-index: 10; font-size: 14px;
+    background: rgba(30,34,45,0.8); padding: 5px 10px; border-radius: 4px;
+    pointer-events: none; color: #d1d4dc;
+}

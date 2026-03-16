@@ -5,7 +5,7 @@ class AppState:
     """
     全局状态机：用于给 REST API 提供系统运行状态和交易对列表
     """
-    def __init__(self):
+    def __init__(self) -> None:
         # 存储每个交易所拉取到的全量交易对
         self.symbols: Dict[str, List[str]] = {
             "binance":[],

@@ -1,21 +1,18 @@
-# config.yaml (全局配置文件)
-
 system:
-  # 是否开启本地代理穿透 (国内开发必开，如果你部署到海外服务器，把这个改成 false)
   use_proxy: true
-  proxy_url: "http://127.0.0.1:10809"
-  debug: true
+  # 用 host.docker.internal 穿透容器，连接宿主机的 10809 代理
+  proxy_url: "http://host.docker.internal:10809"
+  debug: false
 
 database:
-  # InfluxDB 的连接配置
-  url: "http://localhost:8086"
+  url: "http://influxdb:8086"
   token: "my-super-secret-auth-token-for-kline"
   org: "kline_org"
   bucket: "kline_bucket"
 
-redis:
-  url: "redis://localhost:6379"
-
 server:
   host: "0.0.0.0"
   port: 8000
+
+redis:
+  url: "redis://redis:6379"

@@ -11,32 +11,32 @@ class ConnectionManager:
     """
     分布式 WebSocket 连接管理器
     """
-    def __init__(self):
+    def __init__(self) -> None:
         # 本地内存字典，只存连到【当前容器】的用户
         self.subscriptions: Dict[str, Set[WebSocket]] = {}
         # 连接 Redis
         self.redis = aioredis.from_url(settings.redis.url)
         self.pubsub = self.redis.pubsub()
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
 
-    def disconnect(self, websocket: WebSocket):
+    def disconnect(self, websocket: WebSocket) -> None:
         """清理死连接"""
         for symbol, connections in self.subscriptions.items():
             if websocket in connections:
                 connections.remove(websocket)
 
-    async def subscribe(self, websocket: WebSocket, symbol: str):
+    async def subscribe(self, websocket: WebSocket, symbol: str) -> None:
         if symbol not in self.subscriptions:
             self.subscriptions[symbol] = set()
         self.subscriptions[symbol].add(websocket)
 
-    async def unsubscribe(self, websocket: WebSocket, symbol: str):
+    async def unsubscribe(self, websocket: WebSocket, symbol: str) -> None:
         if symbol in self.subscriptions and websocket in self.subscriptions[symbol]:
             self.subscriptions[symbol].remove(websocket)
 
-    async def broadcast_local(self, message_str: str, symbol: str):
+    async def broadcast_local(self, message_str: str, symbol: str) -> None:
         """收到 Redis 的广播后，转发给连在本机的对应用户"""
         if symbol in self.subscriptions:
             connections = self.subscriptions[symbol]
@@ -51,7 +51,7 @@ class ConnectionManager:
             for dead in dead_connections:
                 self.disconnect(dead)
 
-    async def listen_to_redis(self):
+    async def listen_to_redis(self) -> None:
         """
         后台守护进程：持续监听 Redis 频道的全局广播
         """

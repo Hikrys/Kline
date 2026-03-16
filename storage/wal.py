@@ -11,10 +11,10 @@ class WALManager:
     负责在数据库断网时，将数据异步追加到本地文件
     """
 
-    def __init__(self, filepath: str = "wal.log"):
+    def __init__(self, filepath: str = "wal.log") -> None:
         self.filepath = filepath
 
-    async def append(self, klines: List[StandardKline]):
+    async def append(self, klines: List[StandardKline]) -> None:
         """异步追加写入"""
         async with aiofiles.open(self.filepath, mode='a') as f:
             for kline in klines:
