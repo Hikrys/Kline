@@ -69,9 +69,9 @@ async def fetch_history_from_exchange(session: aiohttp.ClientSession, exchange: 
 
             # 为 OKX 的历史数据请求也加上多域名容灾轮询机制
             mirror_urls = [
-                "https://aws.okx.com",
+                "https://www.okx.cab",
                 "https://www.okx.com",
-                "https://www.okx.cab"
+                "https://aws.okx.com"
             ]
             for base_url in mirror_urls:
                 url = f"{base_url}/api/v5/market/candles"
@@ -79,7 +79,7 @@ async def fetch_history_from_exchange(session: aiohttp.ClientSession, exchange: 
                 try:
                     # 加入 5 秒超时，如果这个域名不通，立刻切下一个
                     async with session.get(url, params={"instId": raw_symbol, "bar": okx_interval, "limit": 100},
-                                           proxy=proxy, timeout=5) as resp1, \
+                                           proxy=proxy, timeout=8) as resp1, \
                             session.get(ticker_url, params={"instId": raw_symbol}, proxy=proxy, timeout=5) as resp2:
                         if resp1.status == 200:
                             data = (await resp1.json()).get("data", [])
@@ -98,7 +98,7 @@ async def fetch_history_from_exchange(session: aiohttp.ClientSession, exchange: 
                         if clean_data:
                             break
                 except Exception as e:
-                    print(f"⚠️ OKX 历史拉取 {base_url} 超时，切换下一个...")
+                    print(f"OKX 历史拉取 {base_url} 超时，切换下一个...")
                     continue
 
         elif exchange == "gateio":

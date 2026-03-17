@@ -1,6 +1,7 @@
 document.addEventListener('DOMContentLoaded', async function() {
     if (typeof LightweightCharts === 'undefined') {
         alert('图表库加载失败，请刷新页面重试！');
+        document.getElementById('legend').innerText = '图表库加载失败';
         return;
     }
 
@@ -11,19 +12,30 @@ document.addEventListener('DOMContentLoaded', async function() {
         timeScale: { timeVisible: true, secondsVisible: false }
     });
 
-    chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.1, bottom: 0.25 } });
-    chart.priceScale('').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+    chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.1, bottom: 0.3 } });
 
     const series = chart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
-    const volumeSeries = chart.addHistogramSeries({ color: '#26a69a', priceFormat: { type: 'volume' }, priceScaleId: '' });
+    const volumeSeries = chart.addHistogramSeries({ color: '#26a69a', priceFormat: { type: 'volume' }, priceScaleId: '', scaleMargins: { top: 0.8, bottom: 0 } });
 
     const legend = document.getElementById('legend');
     const tzOffset = new Date().getTimezoneOffset() * 60;
 
     let ws = null;
-    let pingInterval = null; // 记录心跳定时器，防止泄漏
+    let pingInterval = null;
     let currentExchange = "binance";
     let currentSymbol = "BTC/USDT";
+    let currentBar = null;
+
+    function snapTime(timestampMs, interval) {
+        const date = new Date(timestampMs);
+        if (interval === '1m') return Math.floor(timestampMs / 60000) * 60;
+        if (interval === '5m') return Math.floor(timestampMs / 300000) * 300;
+        if (interval === '15m') return Math.floor(timestampMs / 900000) * 900;
+        if (interval === '1h') { date.setUTCMinutes(0, 0, 0); return Math.floor(date.getTime() / 1000); }
+        if (interval === '4h') { date.setUTCHours(Math.floor(date.getUTCHours() / 4) * 4, 0, 0, 0); return Math.floor(date.getTime() / 1000); }
+        if (interval === '1d') { date.setUTCHours(0, 0, 0, 0); return Math.floor(date.getTime() / 1000); }
+        return Math.floor(timestampMs / 1000);
+    }
 
     async function loadSymbols() {
         try {
@@ -31,6 +43,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             const data = await res.json();
             const datalist = document.getElementById('symbol-list');
             datalist.innerHTML = '';
+
             for (const exchange in data) {
                 data[exchange].forEach(sym => {
                     const option = document.createElement('option');
@@ -43,6 +56,8 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     function onConfigChange() {
         const rawInput = document.getElementById('symbol-input').value;
+        const interval = document.getElementById('interval-select').value;
+
         if (rawInput.includes(":")) {
             const parts = rawInput.split(":");
             currentExchange = parts[0];
@@ -54,15 +69,14 @@ document.addEventListener('DOMContentLoaded', async function() {
         series.setData([]); volumeSeries.setData([]);
         legend.innerHTML = `${currentExchange.toUpperCase()}: ${currentSymbol} 加载中...`;
 
-        // 💡【核心修复1】：不再暴力断开 WS！复用同一条连接，只发送新指令！
         connectWS();
     }
+
     window.onConfigChange = onConfigChange;
 
     function connectWS() {
         const interval = document.getElementById('interval-select').value;
 
-        // 如果连接已存在且正常，直接发送新指令，直接 return！
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ action: "get_history", exchange: currentExchange, symbol: currentSymbol, interval: interval }));
             ws.send(JSON.stringify({ action: "subscribe", symbol: currentSymbol }));
@@ -78,7 +92,6 @@ document.addEventListener('DOMContentLoaded', async function() {
             ws.send(JSON.stringify({ action: "get_history", exchange: currentExchange, symbol: currentSymbol, interval: interval }));
             ws.send(JSON.stringify({ action: "subscribe", symbol: currentSymbol }));
 
-            // 💡【核心修复2】：建立新连接时，先清理旧的定时器，防止泄漏！
             if(pingInterval) clearInterval(pingInterval);
             pingInterval = setInterval(() => {
                 if(ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: "ping" }));
@@ -95,37 +108,49 @@ document.addEventListener('DOMContentLoaded', async function() {
                 if (msg.type === "history" && msg.data) {
                     const kData = msg.data.map(i => ({ time: i.time - tzOffset, open: i.open, high: i.high, low: i.low, close: i.close }));
                     const vData = msg.data.map(i => ({ time: i.time - tzOffset, value: i.volume, color: i.close >= i.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)' }));
+
                     if (kData.length > 0) {
                         series.setData(kData); volumeSeries.setData(vData);
+                        currentBar = kData[kData.length - 1];
                         updateLegend(msg.data[msg.data.length-1], vData[vData.length-1]);
                         if(msg.ticker) {
                             const pct = parseFloat(msg.ticker.priceChangePercent);
                             document.getElementById('ticker-info').innerHTML = `<span style="color:${pct>=0?'#00ff00':'#ff3333'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;
                         }
                     } else {
-                        legend.innerHTML = `⚠️ ${currentExchange.toUpperCase()}: ${currentSymbol} 暂无历史数据`;
+                        legend.innerHTML = `${currentExchange.toUpperCase()}: ${currentSymbol} 暂无历史数据`;
                     }
                 }
 
                 if (msg.type === "realtime" && msg.data && msg.data.symbol === currentSymbol) {
                     const k = msg.data;
-                    // 把后端传来的 1m 实时数据的时间戳，向下取整对齐到当前前端选择的周期！
-                    const intervalSecs = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400 }[currentInterval] || 60;
-                    // 对齐算法：去除余数，吸附到整点/整小时
-                    const flooredTime = Math.floor(k.timestamp / 1000 / intervalSecs) * intervalSecs - tzOffset;
+                    const snappedTime = snapTime(k.timestamp, currentInterval) - tzOffset;
 
-                    series.update({ time: flooredTime, open: k.open, high: k.high, low: k.low, close: k.close });
-                    volumeSeries.update({ time: flooredTime, value: k.volume, color: k.close >= k.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)' });
+                    if (!currentBar || snappedTime > currentBar.time) {
+                        currentBar = { time: snappedTime, open: k.open, high: k.high, low: k.low, close: k.close };
+                        volumeSeries.update({ time: snappedTime, value: k.volume, color: k.close >= k.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)' });
+                    } else if (snappedTime === currentBar.time) {
+                        currentBar.high = Math.max(currentBar.high, k.high);
+                        currentBar.low = Math.min(currentBar.low, k.low);
+                        currentBar.close = k.close;
+                    }
+                    series.update(currentBar);
                     updateLegend(k, {value: k.volume});
                 }
-            } catch (err) { console.error("解析 WS 失败:", err); }
+            } catch (err) { console.error("WS错误:", err); }
         };
 
         ws.onclose = () => {
             if(pingInterval) clearInterval(pingInterval);
             document.getElementById('ws-status').innerText = '🔴 WS 断开';
             document.getElementById('ws-status').className = 'status offline';
-            setTimeout(connectWS, 3000);
+            setTimeout(() => connectWS(currentExchange, currentSymbol, interval), 3000);
+        };
+
+        ws.onerror = (err) => {
+            console.error('WS 错误:', err);
+            document.getElementById('ws-status').innerText = '🔴 WS 连接错误';
+            document.getElementById('ws-status').className = 'status offline';
         };
     }
 
@@ -135,6 +160,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         legend.innerHTML = `${currentExchange.toUpperCase()}: ${currentSymbol} O:${Number(k.open).toFixed(2)} H:${Number(k.high).toFixed(2)} L:${Number(k.low).toFixed(2)} C:${Number(k.close).toFixed(2)} V:${Number(v.value).toFixed(2)} T:${turnover}`;
     }
 
+    document.getElementById('interval-select').addEventListener('change', onConfigChange);
+    document.getElementById('symbol-input').addEventListener('change', onConfigChange);
     document.getElementById('symbol-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') onConfigChange(); });
 
     await loadSymbols();
