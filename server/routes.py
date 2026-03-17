@@ -35,14 +35,9 @@ async def get_status():
     })
 
 
-async def fetch_history_from_exchange(
-    session: aiohttp.ClientSession,
-    exchange: str,
-    symbol: str,
-    interval: str
-) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+async def fetch_history_from_exchange(session: aiohttp.ClientSession, exchange: str, symbol: str, interval: str):
     """
-    根据前端传来的交易所和周期，动态穿透去拉取真实历史数据和 24H 涨跌幅
+    根据前端传来的交易所和周期，动态穿透去拉取真实历史数据和 24H 涨跌幅！
     """
     proxy = settings.system.proxy_url if settings.system.use_proxy else None
     clean_data = []
@@ -54,10 +49,10 @@ async def fetch_history_from_exchange(
             ticker_url = "https://api.binance.com/api/v3/ticker/24hr"
             raw_symbol = symbol.replace("/", "")
 
-            # 并发获取 K线 和 24H 涨跌幅
+            # 加上 10 秒超时防止卡死
             async with session.get(kline_url, params={"symbol": raw_symbol, "interval": interval, "limit": 100},
-                                   proxy=proxy) as resp1, \
-                    session.get(ticker_url, params={"symbol": raw_symbol}, proxy=proxy) as resp2:
+                                   proxy=proxy, timeout=10) as resp1, \
+                    session.get(ticker_url, params={"symbol": raw_symbol}, proxy=proxy, timeout=10) as resp2:
                 if resp1.status == 200:
                     data = await resp1.json()
                     clean_data = [
@@ -70,25 +65,41 @@ async def fetch_history_from_exchange(
 
         elif exchange == "okx":
             okx_interval = interval.replace("h", "H").replace("d", "D")
-            url = "https://aws.okx.com/api/v5/market/candles"
-            ticker_url = "https://aws.okx.com/api/v5/market/ticker"
             raw_symbol = symbol.replace("/", "-")
 
-            async with session.get(url, params={"instId": raw_symbol, "bar": okx_interval, "limit": 100},
-                                   proxy=proxy) as resp1, \
-                    session.get(ticker_url, params={"instId": raw_symbol}, proxy=proxy) as resp2:
-                if resp1.status == 200:
-                    data = (await resp1.json()).get("data", [])
-                    data.reverse()  # OKX 是倒序的，需要反转
-                    clean_data = [
-                        {"time": int(k[0]) / 1000, "open": float(k[1]), "high": float(k[2]), "low": float(k[3]),
-                         "close": float(k[4]), "volume": float(k[5]), "turnover": float(k[6])} for k in data]
-                if resp2.status == 200:
-                    t_data = (await resp2.json()).get("data", [{}])[0]
-                    open24 = float(t_data.get("sod24", 1) or 1)
-                    last = float(t_data.get("last", 0))
-                    pct = ((last - open24) / open24) * 100 if open24 else 0.0
-                    ticker_data = {"priceChangePercent": f"{pct:.2f}", "lastPrice": str(last)}
+            # 为 OKX 的历史数据请求也加上多域名容灾轮询机制
+            mirror_urls = [
+                "https://aws.okx.com",
+                "https://www.okx.com",
+                "https://www.okx.cab"
+            ]
+            for base_url in mirror_urls:
+                url = f"{base_url}/api/v5/market/candles"
+                ticker_url = f"{base_url}/api/v5/market/ticker"
+                try:
+                    # 加入 5 秒超时，如果这个域名不通，立刻切下一个
+                    async with session.get(url, params={"instId": raw_symbol, "bar": okx_interval, "limit": 100},
+                                           proxy=proxy, timeout=5) as resp1, \
+                            session.get(ticker_url, params={"instId": raw_symbol}, proxy=proxy, timeout=5) as resp2:
+                        if resp1.status == 200:
+                            data = (await resp1.json()).get("data", [])
+                            data.reverse()  # OKX 是倒序的，必须反转
+                            clean_data = [
+                                {"time": int(k[0]) / 1000, "open": float(k[1]), "high": float(k[2]), "low": float(k[3]),
+                                 "close": float(k[4]), "volume": float(k[5]), "turnover": float(k[6])} for k in data]
+                        if resp2.status == 200:
+                            t_data = (await resp2.json()).get("data", [{}])[0]
+                            open24 = float(t_data.get("open24h", t_data.get("sodUtc0", 1)) or 1)
+                            last = float(t_data.get("last", 0))
+                            pct = ((last - open24) / open24) * 100 if open24 else 0.0
+                            ticker_data = {"priceChangePercent": f"{pct:.2f}", "lastPrice": str(last)}
+
+                        # 如果成功拿到历史数据，说明这个域名通了，直接跳出循环！
+                        if clean_data:
+                            break
+                except Exception as e:
+                    print(f"⚠️ OKX 历史拉取 {base_url} 超时，切换下一个...")
+                    continue
 
         elif exchange == "gateio":
             url = "https://api.gateio.ws/api/v4/spot/candlesticks"
@@ -96,8 +107,8 @@ async def fetch_history_from_exchange(
             raw_symbol = symbol.replace("/", "_")
 
             async with session.get(url, params={"currency_pair": raw_symbol, "interval": interval, "limit": 100},
-                                   proxy=proxy) as resp1, \
-                    session.get(ticker_url, params={"currency_pair": raw_symbol}, proxy=proxy) as resp2:
+                                   proxy=proxy, timeout=10) as resp1, \
+                    session.get(ticker_url, params={"currency_pair": raw_symbol}, proxy=proxy, timeout=10) as resp2:
                 if resp1.status == 200:
                     data = await resp1.json()
                     clean_data = [{"time": int(k[0]), "open": float(k[5]), "high": float(k[3]), "low": float(k[4]),
@@ -109,7 +120,7 @@ async def fetch_history_from_exchange(
                                        "lastPrice": t_data[0].get("last", "0.00")}
 
     except Exception as e:
-        print(f"动态拉取 {exchange} 历史数据失败: {e}")
+        print(f"⚠️ 动态拉取 {exchange} 历史数据全局异常: {e}")
 
     return clean_data, ticker_data
 
@@ -142,7 +153,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_text(orjson.dumps({"type": "pong"}))
 
             elif action == "get_history" and symbol:
-                # 调用多交易所代理请求，拿到洗干净的历史数据和真实涨跌幅！
+                # 调用多交易所代理请求，拿到洗干净的历史数据和真实涨跌幅
                 history_data, ticker_data = await fetch_history_from_exchange(session, exchange, symbol, interval)
 
                 await websocket.send_text(orjson.dumps({

@@ -100,7 +100,12 @@ class DataCollector:
                 self.queue.task_done()
             except asyncio.CancelledError:
                 if batch:
-                    await db.write_batch(batch)
+                    print("检测到退出信号，正在将内存数据写入 WAL 日志...")
+                    import os
+                    from storage.wal import WALManager
+                    emergency_wal = WALManager(os.path.join(os.getcwd(), "wal.log"))
+                    # 使用当前事件循环紧急跑完这段协程
+                    asyncio.get_event_loop().run_until_complete(emergency_wal.append(batch))
                 break
             except Exception as e:
                 print(f"存储消费者异常: {e}")
